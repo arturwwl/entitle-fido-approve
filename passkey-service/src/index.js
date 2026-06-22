@@ -5,7 +5,7 @@ const session = require('express-session');
 const path = require('path');
 
 const webauthn = require('./webauthn');
-const { createWebhookMiddleware } = require('./github');
+const { createWebhookRouter } = require('./github');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,9 +14,8 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 // ---------------------------------------------------------------------------
 
-// GitHub webhooks must receive the raw body for HMAC verification.
-// Mount the webhook handler BEFORE express.json().
-app.use('/webhook', createWebhookMiddleware());
+// Webhook route (handles its own body parsing for HMAC verification)
+app.use(createWebhookRouter());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));

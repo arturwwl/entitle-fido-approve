@@ -48,9 +48,7 @@ jobs:
         id: plan
         run: |
           terraform plan -no-color -out=tfplan \
-            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}" \
-            -var="idp_group_id=${{ secrets.TF_VAR_IDP_GROUP_ID }}" \
-            -var="role_id=${{ secrets.TF_VAR_ROLE_ID }}"
+            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}"
         continue-on-error: true  # let the comment step run even if plan fails
 
       - name: Post plan as PR comment
