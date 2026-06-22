@@ -20,9 +20,17 @@ const {
 const store = require('./store');
 
 const RP_NAME = process.env.RP_NAME || 'Entitle Passkey Gate';
-// Must match the domain where the service is hosted (no scheme, no port).
 const RP_ID = process.env.RP_ID || 'localhost';
 const ORIGIN = process.env.ORIGIN || 'http://localhost:3000';
+
+const ALLOWED_REVIEWERS = process.env.ALLOWED_REVIEWERS
+  ? process.env.ALLOWED_REVIEWERS.split(',').map(s => s.trim()).filter(Boolean)
+  : [];
+
+function isAllowed(githubLogin) {
+  if (ALLOWED_REVIEWERS.length === 0) return true;
+  return ALLOWED_REVIEWERS.includes(githubLogin);
+}
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -31,6 +39,7 @@ const ORIGIN = process.env.ORIGIN || 'http://localhost:3000';
 async function getRegistrationOptions(req, res) {
   const githubLogin = req.session.githubLogin;
   if (!githubLogin) return res.status(401).json({ error: 'Not authenticated' });
+  if (!isAllowed(githubLogin)) return res.status(403).json({ error: `@${githubLogin} is not in the allowed reviewers list` });
 
   const existingCredentials = store.getCredentialsForUser(githubLogin);
 
@@ -106,6 +115,7 @@ async function getAuthenticationOptions(req, res) {
   const githubLogin = req.session.githubLogin;
   console.log('getAuthenticationOptions: githubLogin=', githubLogin);
   if (!githubLogin) return res.status(401).json({ error: 'Not authenticated' });
+  if (!isAllowed(githubLogin)) return res.status(403).json({ error: `@${githubLogin} is not in the allowed reviewers list` });
 
   const existingCredentials = store.getCredentialsForUser(githubLogin);
 
