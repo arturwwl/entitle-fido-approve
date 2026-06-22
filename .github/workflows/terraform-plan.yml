@@ -7,8 +7,6 @@ name: "Terraform Plan"
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "terraform/**"
 
 permissions:
   contents: read

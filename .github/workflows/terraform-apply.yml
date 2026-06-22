@@ -6,8 +6,6 @@ name: "Terraform Apply"
 on:
   push:
     branches: [main]
-    paths:
-      - "terraform/**"
 
 permissions:
   contents: read
