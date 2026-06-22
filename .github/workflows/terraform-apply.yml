@@ -1,0 +1,49 @@
+name: "Terraform Apply"
+
+# Runs when a PR is merged into main.
+# At this point two reviewers have already approved with their passkeys.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    name: "terraform apply"
+    runs-on: ubuntu-latest
+
+    environment: production   # optional: add a GitHub Environment with extra protection rules
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.8"
+
+      - name: Terraform Init
+        run: terraform init
+        env:
+          # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Apply
+        run: |
+          terraform apply -auto-approve \
+            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}" \
+            -var="idp_group_id=${{ secrets.TF_VAR_IDP_GROUP_ID }}" \
+            -var="role_id=${{ secrets.TF_VAR_ROLE_ID }}"
+
+      - name: Show policy URL
+        run: terraform output entitle_policy_url

@@ -1,0 +1,109 @@
+name: "Terraform Plan"
+
+# Runs on every PR targeting main.
+# Posts the plan output as a PR comment so reviewers can see exactly
+# what will change before they approve with their passkey.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+  pull-requests: write   # needed to post the plan comment
+
+jobs:
+  plan:
+    name: "terraform plan"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.8"
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        env:
+          # If you use an S3 backend, add AWS credentials here:
+          # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan \
+            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}" \
+            -var="idp_group_id=${{ secrets.TF_VAR_IDP_GROUP_ID }}" \
+            -var="role_id=${{ secrets.TF_VAR_ROLE_ID }}"
+        continue-on-error: true  # let the comment step run even if plan fails
+
+      - name: Post plan as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('<!-- tf-plan-comment -->')
+            );
+
+            const output = `<!-- tf-plan-comment -->
+            ## Terraform Plan — Entitle Birthright Policy
+
+            #### Init: \`${{ steps.init.outcome }}\`
+            #### Validate: \`${{ steps.validate.outcome }}\`
+            #### Plan: \`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`terraform
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>
+
+            > **Review carefully, then approve using your passkey (FIDO2).**
+            > Two approvals required before this PR can be merged.
+
+            *Pushed by @${{ github.actor }}, action: \`${{ github.event_name }}\`*`;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: output,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: output,
+              });
+            }
+
+      - name: Fail if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1

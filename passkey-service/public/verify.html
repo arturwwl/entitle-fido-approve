@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Passkey Verification — Entitle PR Gate</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+
+    .logo { font-size: 2.5rem; margin-bottom: 1rem; }
+
+    h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .subtitle { font-size: 0.875rem; color: #8b949e; margin-bottom: 2rem; }
+
+    .pr-badge {
+      display: inline-block;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.8rem;
+      color: #8b949e;
+      margin-bottom: 2rem;
+    }
+
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #238636; color: #fff; }
+    .btn-primary:not(:disabled):hover { background: #2ea043; }
+    .btn-secondary { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; margin-top: 0.75rem; }
+    .btn-secondary:not(:disabled):hover { background: #30363d; }
+
+    .status {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .status.show { display: block; }
+    .status.success { background: #0d4429; border: 1px solid #238636; color: #3fb950; }
+    .status.error   { background: #4b1113; border: 1px solid #f85149; color: #f85149; }
+    .status.info    { background: #0c2d6b; border: 1px solid #388bfd; color: #79c0ff; }
+
+    .steps { text-align: left; margin-top: 1.5rem; }
+    .steps li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.875rem;
+      color: #8b949e;
+    }
+    .steps li.done { color: #3fb950; }
+    .steps .step-icon { flex-shrink: 0; width: 1.25rem; text-align: center; }
+
+    .divider { border-top: 1px solid #30363d; margin: 1.5rem 0; }
+
+    #login-section input {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+    }
+    #login-section input:focus { outline: none; border-color: #388bfd; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">🔐</div>
+  <h1>Passkey Verification Required</h1>
+  <p class="subtitle">Authenticate with your passkey to unlock your PR approval</p>
+
+  <div id="pr-info" class="pr-badge" style="display:none"></div>
+
+  <!-- Step 1: identify the GitHub user (demo: manual entry) -->
+  <div id="login-section">
+    <input type="text" id="github-login" placeholder="Your GitHub username" autocomplete="username" />
+    <button class="btn btn-secondary" id="btn-set-login">Continue</button>
+  </div>
+
+  <!-- Step 2: register passkey (first time only) -->
+  <div id="register-section" style="display:none">
+    <p style="font-size:0.85rem;color:#8b949e;margin-bottom:1rem;">
+      No passkey registered yet. Register one now — you only need to do this once.
+    </p>
+    <button class="btn btn-secondary" id="btn-register">Register passkey</button>
+    <div class="divider"></div>
+  </div>
+
+  <!-- Step 3: authenticate -->
+  <div id="auth-section" style="display:none">
+    <button class="btn btn-primary" id="btn-authenticate">
+      Verify with passkey
+    </button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <ul class="steps" id="steps-list" style="display:none">
+    <li id="step-login"><span class="step-icon">○</span> Identify as GitHub user</li>
+    <li id="step-auth"><span class="step-icon">○</span> Complete passkey challenge</li>
+    <li id="step-approve"><span class="step-icon">○</span> Return to GitHub and click Approve</li>
+  </ul>
+</div>
+
+<script type="module">
+  // ---------------------------------------------------------------------------
+  // Utilities
+  // ---------------------------------------------------------------------------
+  const params = new URLSearchParams(location.search);
+  const owner = params.get('owner');
+  const repo  = params.get('repo');
+  const pr    = params.get('pr');
+
+  if (owner && repo && pr) {
+    const badge = document.getElementById('pr-info');
+    badge.textContent = `${owner}/${repo} #${pr}`;
+    badge.style.display = 'inline-block';
+  }
+
+  function show(el) { el.style.display = ''; }
+  function hide(el) { el.style.display = 'none'; }
+
+  function setStatus(msg, type = 'info') {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = `status show ${type}`;
+  }
+
+  function setStep(id, done) {
+    const li = document.getElementById(id);
+    li.querySelector('.step-icon').textContent = done ? '✓' : '○';
+    li.classList.toggle('done', done);
+  }
+
+  // base64url ↔ ArrayBuffer helpers
+  function b64urlToBuffer(b64url) {
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    return Uint8Array.from(bin, c => c.charCodeAt(0)).buffer;
+  }
+
+  function bufferToB64url(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    bytes.forEach(b => bin += String.fromCharCode(b));
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
+  // Deep-convert all ArrayBuffers in a credential response to base64url strings
+  function credentialToJSON(cred) {
+    if (cred instanceof ArrayBuffer) return bufferToB64url(cred);
+    if (cred instanceof Uint8Array) return bufferToB64url(cred.buffer);
+    if (Array.isArray(cred)) return cred.map(credentialToJSON);
+    if (cred && typeof cred === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(cred)) {
+        try { out[k] = credentialToJSON(v); } catch { out[k] = v; }
+      }
+      return out;
+    }
+    return cred;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 1 — set GitHub login
+  // ---------------------------------------------------------------------------
+  document.getElementById('btn-set-login').addEventListener('click', async () => {
+    const login = document.getElementById('github-login').value.trim();
+    if (!login) return setStatus('Enter your GitHub username', 'error');
+
+    const qs = new URLSearchParams({ login });
+    if (owner && repo && pr) {
+      qs.set('owner', owner); qs.set('repo', repo); qs.set('pr', pr);
+    }
+
+    const r = await fetch(`/session/set?${qs}`);
+    if (!r.ok) return setStatus('Failed to set session', 'error');
+
+    hide(document.getElementById('login-section'));
+    show(document.getElementById('steps-list'));
+    setStep('step-login', true);
+
+    // Check if user already has a credential registered
+    const me = await fetch('/session/me').then(x => x.json());
+    if (me.githubLogin) {
+      // Try auth directly; show register option too in case no cred exists
+      show(document.getElementById('register-section'));
+      show(document.getElementById('auth-section'));
+      setStatus(`Logged in as @${me.githubLogin}. Tap "Verify with passkey" to proceed.`, 'info');
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Step 2 — register (first time)
+  // ---------------------------------------------------------------------------
+  document.getElementById('btn-register').addEventListener('click', async () => {
+    setStatus('Starting registration…', 'info');
+    const optRes = await fetch('/webauthn/register/options');
+    if (!optRes.ok) return setStatus(await optRes.text(), 'error');
+    const options = await optRes.json();
+
+    // Convert challenge + user.id to ArrayBuffer
+    options.challenge = b64urlToBuffer(options.challenge);
+    options.user.id   = b64urlToBuffer(options.user.id);
+    if (options.excludeCredentials) {
+      options.excludeCredentials = options.excludeCredentials.map(c => ({
+        ...c, id: b64urlToBuffer(c.id),
+      }));
+    }
+
+    let credential;
+    try {
+      credential = await navigator.credentials.create({ publicKey: options });
+    } catch (e) {
+      return setStatus(`Passkey creation cancelled: ${e.message}`, 'error');
+    }
+
+    const verRes = await fetch('/webauthn/register/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentialToJSON(credential)),
+    });
+
+    if (!verRes.ok) return setStatus(`Registration failed: ${await verRes.text()}`, 'error');
+    setStatus('Passkey registered! Now verify with it below.', 'success');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Step 3 — authenticate
+  // ---------------------------------------------------------------------------
+  document.getElementById('btn-authenticate').addEventListener('click', async () => {
+    setStatus('Starting passkey challenge…', 'info');
+    document.getElementById('btn-authenticate').disabled = true;
+
+    const optRes = await fetch('/webauthn/auth/options');
+    if (!optRes.ok) {
+      setStatus(await optRes.text(), 'error');
+      document.getElementById('btn-authenticate').disabled = false;
+      return;
+    }
+    const options = await optRes.json();
+
+    options.challenge = b64urlToBuffer(options.challenge);
+    if (options.allowCredentials) {
+      options.allowCredentials = options.allowCredentials.map(c => ({
+        ...c, id: b64urlToBuffer(c.id),
+      }));
+    }
+
+    let assertion;
+    try {
+      assertion = await navigator.credentials.get({ publicKey: options });
+    } catch (e) {
+      setStatus(`Passkey challenge cancelled: ${e.message}`, 'error');
+      document.getElementById('btn-authenticate').disabled = false;
+      return;
+    }
+
+    const verRes = await fetch('/webauthn/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentialToJSON(assertion)),
+    });
+
+    if (!verRes.ok) {
+      setStatus(`Verification failed: ${await verRes.text()}`, 'error');
+      document.getElementById('btn-authenticate').disabled = false;
+      return;
+    }
+
+    setStep('step-auth', true);
+    setStatus('Passkey verified ✓  You can now return to GitHub and approve the PR.', 'success');
+
+    // Update step 3 hint
+    const step3 = document.getElementById('step-approve');
+    step3.querySelector('.step-icon').textContent = '→';
+    if (owner && repo && pr) {
+      const link = document.createElement('a');
+      link.href = `https://github.com/${owner}/${repo}/pull/${pr}`;
+      link.textContent = 'Go to PR and click Approve →';
+      link.style.color = '#388bfd';
+      step3.innerHTML = '';
+      step3.appendChild(document.createElement('span')).textContent = '→ ';
+      step3.appendChild(link);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Init — restore session state on page load
+  // ---------------------------------------------------------------------------
+  (async () => {
+    const me = await fetch('/session/me').then(r => r.json()).catch(() => null);
+    if (me?.githubLogin) {
+      document.getElementById('github-login').value = me.githubLogin;
+    }
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  passkey-gate:
+    build:
+      context: ./passkey-service
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./passkey-service/.env
+    restart: unless-stopped
