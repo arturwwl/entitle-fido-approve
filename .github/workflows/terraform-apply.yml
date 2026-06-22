@@ -41,7 +41,8 @@ jobs:
       - name: Terraform Apply
         run: |
           terraform apply -auto-approve \
-            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}"
+            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}" \
+            -var="entitle_endpoint=${{ secrets.TF_VAR_ENTITLE_ENDPOINT }}"
 
       - name: Show policy URL
         run: terraform output entitle_policy_url

@@ -48,7 +48,8 @@ jobs:
         id: plan
         run: |
           terraform plan -no-color -out=tfplan \
-            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}"
+            -var="entitle_api_key=${{ secrets.ENTITLE_API_KEY }}" \
+            -var="entitle_endpoint=${{ secrets.TF_VAR_ENTITLE_ENDPOINT }}"
         continue-on-error: true  # let the comment step run even if plan fails
 
       - name: Post plan as PR comment
