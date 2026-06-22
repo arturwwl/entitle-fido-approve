@@ -20,9 +20,17 @@ const {
 const store = require('./store');
 
 const RP_NAME = process.env.RP_NAME || 'Entitle Passkey Gate';
-// Must match the domain where the service is hosted (no scheme, no port).
 const RP_ID = process.env.RP_ID || 'localhost';
 const ORIGIN = process.env.ORIGIN || 'http://localhost:3000';
+
+const ALLOWED_REVIEWERS = process.env.ALLOWED_REVIEWERS
+  ? process.env.ALLOWED_REVIEWERS.split(',').map(s => s.trim()).filter(Boolean)
+  : [];
+
+function isAllowed(githubLogin) {
+  if (ALLOWED_REVIEWERS.length === 0) return true;
+  return ALLOWED_REVIEWERS.includes(githubLogin);
+}
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -31,6 +39,7 @@ const ORIGIN = process.env.ORIGIN || 'http://localhost:3000';
 async function getRegistrationOptions(req, res) {
   const githubLogin = req.session.githubLogin;
   if (!githubLogin) return res.status(401).json({ error: 'Not authenticated' });
+  if (!isAllowed(githubLogin)) return res.status(403).json({ error: `@${githubLogin} is not in the allowed reviewers list` });
 
   const existingCredentials = store.getCredentialsForUser(githubLogin);
 
@@ -61,6 +70,8 @@ async function verifyRegistration(req, res) {
   const expectedChallenge = store.getChallenge(req.sessionID);
   if (!expectedChallenge) return res.status(400).json({ error: 'No challenge found' });
 
+  console.log('Registration body received:', JSON.stringify(req.body, null, 2));
+
   let verification;
   try {
     verification = await verifyRegistrationResponse({
@@ -81,11 +92,15 @@ async function verifyRegistration(req, res) {
     return res.status(400).json({ error: 'Verification failed' });
   }
 
-  const { credential } = verification.registrationInfo;
+  const regInfo = verification.registrationInfo;
+  const credId = regInfo.credentialID;
+  const credPublicKey = regInfo.credentialPublicKey;
+  const credCounter = regInfo.counter ?? 0;
+
   store.saveCredential(githubLogin, {
-    id: credential.id,
-    publicKey: Buffer.from(credential.publicKey).toString('base64url'),
-    counter: credential.counter,
+    id: credId,
+    publicKey: Buffer.from(credPublicKey).toString('base64url'),
+    counter: credCounter,
     transports: req.body.response?.transports ?? [],
   });
 
@@ -98,7 +113,9 @@ async function verifyRegistration(req, res) {
 
 async function getAuthenticationOptions(req, res) {
   const githubLogin = req.session.githubLogin;
+  console.log('getAuthenticationOptions: githubLogin=', githubLogin);
   if (!githubLogin) return res.status(401).json({ error: 'Not authenticated' });
+  if (!isAllowed(githubLogin)) return res.status(403).json({ error: `@${githubLogin} is not in the allowed reviewers list` });
 
   const existingCredentials = store.getCredentialsForUser(githubLogin);
 
@@ -118,16 +135,19 @@ async function getAuthenticationOptions(req, res) {
 
 async function verifyAuthentication(req, res) {
   const githubLogin = req.session.githubLogin;
+  console.log('verifyAuthentication: githubLogin=', githubLogin, 'pendingPR=', req.session.pendingPR);
   if (!githubLogin) return res.status(401).json({ error: 'Not authenticated' });
 
   const { owner, repo, prNumber } = req.session.pendingPR ?? {};
   if (!owner) return res.status(400).json({ error: 'No pending PR in session' });
 
   const expectedChallenge = store.getChallenge(req.sessionID);
+  console.log('verifyAuthentication: challenge=', !!expectedChallenge);
   if (!expectedChallenge) return res.status(400).json({ error: 'No challenge found' });
 
   const storedCredentials = store.getCredentialsForUser(githubLogin);
   const credentialID = req.body.id;
+  console.log('verifyAuthentication: credentialID=', credentialID, 'stored=', storedCredentials.map(c => c.id));
   const storedCred = storedCredentials.find((c) => c.id === credentialID);
   if (!storedCred) return res.status(400).json({ error: 'Unknown credential' });
 
@@ -138,9 +158,9 @@ async function verifyAuthentication(req, res) {
       expectedChallenge,
       expectedOrigin: ORIGIN,
       expectedRPID: RP_ID,
-      credential: {
-        id: storedCred.id,
-        publicKey: Buffer.from(storedCred.publicKey, 'base64url'),
+      authenticator: {
+        credentialID: storedCred.id,
+        credentialPublicKey: Buffer.from(storedCred.publicKey, 'base64url'),
         counter: storedCred.counter,
         transports: storedCred.transports,
       },
@@ -153,15 +173,13 @@ async function verifyAuthentication(req, res) {
 
   store.clearChallenge(req.sessionID);
 
+  console.log('authInfo:', JSON.stringify(verification.authenticationInfo, null, 2));
+
   if (!verification.verified) {
     return res.status(400).json({ error: 'Authentication failed' });
   }
 
-  store.updateCredentialCounter(
-    githubLogin,
-    credentialID,
-    verification.authenticationInfo.newCounter,
-  );
+  store.updateCredentialCounter(githubLogin, credentialID, verification.authenticationInfo.newCounter);
 
   // Mark this GitHub user as passkey-verified for this PR
   store.markVerified(owner, repo, prNumber, githubLogin);

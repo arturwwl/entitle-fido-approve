@@ -25,18 +25,15 @@ Service records reviewer as passkey-verified for this PR
        ▼
 Reviewer clicks Approve on GitHub
        │
-  ┌────┴────────────────────────────────┐
-  │ Webhook: pull_request_review        │
-  │ submitted (state=approved)          │
-  └────┬────────────────────────────────┘
+  Webhook: pull_request_review submitted (state=approved)
        │
   Passkey-verified?
   ├─ NO  → review dismissed automatically
   │        comment: "Please verify first"
   └─ YES → count verified approvals
-           < 2 → status stays PENDING
-           ≥ 2 → status → SUCCESS ✓
-                 merge button unlocked
+           < REQUIRED_APPROVALS → status stays PENDING
+           ≥ REQUIRED_APPROVALS → status → SUCCESS ✓
+                                  merge button unlocked
 ```
 
 ---
@@ -48,24 +45,25 @@ Reviewer clicks Approve on GitHub
 ├── terraform/
 │   ├── main.tf                  # Entitle provider + entitle_policy resource
 │   ├── variables.tf             # All configurable inputs
-│   └── outputs.tf               # Policy ID, number, direct UI link
+│   ├── outputs.tf               # Policy ID, number, direct UI link
+│   └── terraform.tfvars         # IDP group UUID + role UUID (fill these in)
 ├── passkey-service/
 │   ├── src/
 │   │   ├── index.js             # Express app entry point
 │   │   ├── webauthn.js          # @simplewebauthn/server registration + auth
-│   │   ├── github.js            # GitHub App webhook handler + commit-status posting
+│   │   ├── github.js            # Webhook handler + commit-status posting
 │   │   └── store.js             # In-memory credential + verified-approver store
 │   ├── public/
 │   │   └── verify.html          # Reviewer UI — drives the WebAuthn browser API
 │   ├── Dockerfile
-│   ├── .env.example
+│   ├── .env.example             # Copy to .env and fill in
 │   └── package.json
 ├── .github/
 │   └── workflows/
 │       ├── terraform-plan.yml   # Runs on PR — posts plan as comment
 │       └── terraform-apply.yml  # Runs on merge to main — applies changes
-├── branch-protection.tf         # GitHub branch protection (requires both status checks)
-├── docker-compose.yml
+├── branch-protection.tf         # GitHub branch protection (optional, requires admin PAT)
+├── docker-compose.yml           # Use with podman-compose
 └── README.md
 ```
 
@@ -76,75 +74,92 @@ Reviewer clicks Approve on GitHub
 ### 1. Push the repo to GitHub
 
 ```bash
+git add .
+git commit -m "Initial demo setup"
 git remote add origin https://github.com/<org>/entitle-fido-approve.git
 git push -u origin main
 ```
 
-### 2. Configure GitHub Secrets (for Terraform CI)
+### 2. Add GitHub Actions secret
 
-**Repo → Settings → Secrets and variables → Actions:**
+**Repo → Settings → Secrets and variables → Actions → New repository secret:**
 
 | Secret | Value |
 |---|---|
-| `ENTITLE_API_KEY` | Entitle API key (Entitle UI → Settings → API Keys) |
-| `TF_VAR_IDP_GROUP_ID` | UUID of the IdP group for new hires |
-| `TF_VAR_ROLE_ID` | UUID of the role to grant |
+| `ENTITLE_API_KEY` | Entitle UI → Settings → API Keys |
+| `TF_VAR_ENTITLE_ENDPOINT` | Your Entitle API endpoint (only if not using the default `https://api.entitle.io`) |
 
-### 3. Start the passkey-gate service
+### 3. Fill in Terraform variables
+
+Edit `terraform/terraform.tfvars`:
+
+```hcl
+idp_group_id = "<UUID of your IdP group>"   # Entitle UI → Directory → Groups
+role_id      = "<UUID of the role to grant>" # Entitle UI → Integrations → <resource> → Roles
+```
+
+### 4. Configure the passkey-gate service
 
 ```bash
 cd passkey-service
 cp .env.example .env
-# Edit .env — fill in SESSION_SECRET, RP_ID, ORIGIN, GITHUB_APP_TOKEN, GITHUB_WEBHOOK_SECRET
-npm install
-npm start
 ```
 
-For a local demo, expose it with ngrok:
+Edit `.env` — the key values:
+
+| Variable | What to set |
+|---|---|
+| `SESSION_SECRET` | Any random string |
+| `RP_ID` | Bare hostname of your tunnel (e.g. `abc123.trycloudflare.com`) |
+| `ORIGIN` | Full URL with scheme (e.g. `https://abc123.trycloudflare.com`) |
+| `GITHUB_APP_TOKEN` | GitHub fine-grained PAT with *Commit statuses: Read/write* and *Pull requests: Read/write* |
+| `GITHUB_WEBHOOK_SECRET` | Any string — must match what you set in the GitHub webhook |
+| `REQUIRED_APPROVALS` | Number of passkey-verified approvals needed (default: `2`) |
+| `ALLOWED_REVIEWERS` | Comma-separated GitHub usernames allowed to approve (e.g. `alice,bob`) |
+
+### 5. Start the tunnel
 
 ```bash
-ngrok http 3000
-# Copy the https URL (e.g. https://abc123.ngrok-free.app)
-# Set RP_ID=abc123.ngrok-free.app and ORIGIN=https://abc123.ngrok-free.app in .env
+cloudflared tunnel --url http://localhost:3000
 ```
 
-Or with Docker:
+Copy the `https://xxx.trycloudflare.com` URL. Update `RP_ID` and `ORIGIN` in `.env` to match, then rebuild.
+
+> **Note:** The Cloudflare tunnel URL changes every time you restart `cloudflared`. When it changes you must update `.env` and rebuild the container.
+
+### 6. Start the service
 
 ```bash
-docker compose up --build
+cd <repo-root>
+podman-compose down --rmi all && podman-compose up --build
 ```
 
-### 4. Register the GitHub webhook
+The logs should confirm the correct domain:
+```
+RP_ID:  xxx.trycloudflare.com
+ORIGIN: https://xxx.trycloudflare.com
+```
+
+### 7. Register the GitHub webhook
 
 **Repo → Settings → Webhooks → Add webhook:**
 
 | Field | Value |
 |---|---|
-| Payload URL | `https://<your-domain>/webhook` |
+| Payload URL | `https://xxx.trycloudflare.com/webhook` |
 | Content type | `application/json` |
-| Secret | same value as `GITHUB_WEBHOOK_SECRET` in `.env` |
-| Events | `Pull requests`, `Pull request reviews` |
+| Secret | Same value as `GITHUB_WEBHOOK_SECRET` in `.env` |
+| Events | *Pull requests* and *Pull request reviews* |
 
-### 5. Register passkeys for both reviewers (one-time)
+### 8. Register passkeys for reviewers (one-time per person)
 
 Each reviewer visits:
 ```
-https://<your-domain>/verify
+https://xxx.trycloudflare.com/verify
 ```
-— enters their GitHub username — clicks **"Register passkey"** — follows the browser prompt.
+Enters their GitHub username → clicks **Register passkey** → follows the browser prompt.
 
-This stores their credential in the service. They only need to do this once.
-
-### 6. Apply branch protection
-
-```bash
-cd <repo-root>
-export GITHUB_TOKEN=ghp_<admin-pat>
-export TF_VAR_github_owner=<org-or-username>
-terraform init && terraform apply
-```
-
-This enforces 2 required approvals, requires both `terraform plan` and `passkey-gate` status checks to pass, and dismisses stale approvals on new commits.
+> Registered passkeys are stored in memory. They are lost when the container restarts — reviewers need to re-register after each restart.
 
 ---
 
@@ -154,70 +169,79 @@ This enforces 2 required approvals, requires both `terraform plan` and `passkey-
 
 ```bash
 git checkout -b feat/new-hire-birthright
-# Edit terraform/variables.tf with your IDs, or just add a comment to trigger a diff
-git add terraform/ && git commit -m "feat: add new-hire birthright policy"
+# terraform/terraform.tfvars is already filled in
+git add terraform/
+git commit -m "feat: add new-hire birthright policy"
 git push origin feat/new-hire-birthright
 ```
 
-Open a PR on GitHub. The passkey-gate service immediately posts a comment and sets the `passkey-gate` status to **pending**.
+Open a PR on GitHub. Within seconds the passkey-gate service posts a comment and sets the status to **pending**.
 
 ### Step 2 — CI posts the Terraform plan
 
-The `terraform-plan` workflow runs and posts the plan diff as a PR comment. Both status checks are now visible: `terraform plan ✓` and `passkey-gate (pending)`.
+The `terraform-plan` workflow runs and posts the plan diff as a PR comment.
 
 ### Step 3 — Reviewer 1 verifies with passkey
 
-Reviewer 1 clicks the link in the passkey-gate comment:
-
-```
-https://<your-domain>/verify?owner=<org>&repo=entitle-fido-approve&pr=<N>
-```
-
-They enter their GitHub username and click **"Verify with passkey"**. The browser shows the OS passkey prompt — they tap their hardware key or use Face ID / Touch ID. The service records them as verified.
+Reviewer 1 clicks the link in the passkey-gate comment, enters their GitHub username, clicks **Verify with passkey**, and taps their key. The service records them as verified.
 
 ### Step 4 — Reviewer 1 approves on GitHub
 
-Reviewer 1 returns to the PR and clicks **Approve**. The webhook fires: the service confirms they're passkey-verified, counts 1/2, and leaves the status pending.
+Reviewer 1 returns to the PR and clicks **Approve**. The webhook confirms they're passkey-verified (1 of `REQUIRED_APPROVALS`).
 
 ### Step 5 — Reviewer 2 repeats
 
-Reviewer 2 visits the same verify link, taps their passkey, then approves on GitHub. The webhook fires again: 2/2 verified — the service sets `passkey-gate` → **success**.
+Reviewer 2 verifies with their passkey, then approves. The webhook counts 2 verified approvals — `passkey-gate` turns **green**.
 
 ### Step 6 — Merge
 
-Both status checks are green. The PR author merges. The `terraform-apply` workflow runs and applies the plan.
+Both status checks pass. The PR author merges.
 
-### Step 7 — Verify in Entitle UI
+### Step 7 — Terraform applies
 
-The apply output prints:
+The `terraform-apply` workflow runs. The output includes:
 ```
 entitle_policy_url = "https://app.entitle.io/policies/<uuid>"
 ```
 
-Open it — the new birthright policy is there.
+### Step 8 — Verify in Entitle UI
+
+Open the URL — the new birthright policy is visible.
 
 ---
 
-## What happens if someone tries to skip the passkey step?
+## What if someone skips the passkey step?
 
-If a reviewer clicks Approve on GitHub without first visiting the verify page, the webhook handler calls `pulls.dismissReview` within seconds and posts a comment explaining what they need to do. Their approval disappears and the `passkey-gate` status reflects the dismissal. There is no way to merge without the passkey challenge.
+If a reviewer clicks Approve without first visiting the verify page, the webhook dismisses their review within seconds and posts a comment with the verification link. There is no way to merge without completing the passkey challenge.
 
 ---
 
-## Variables reference
+## Configuration reference
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `entitle_api_key` | Yes | — | Entitle API key |
-| `entitle_endpoint` | No | `https://api.entitle.io` | API base URL |
-| `idp_group_id` | Yes | — | IdP group UUID |
-| `role_id` | Yes | — | Entitle role UUID |
-| `policy_sort_order` | No | `10` | Policy priority |
+### `terraform/terraform.tfvars`
 
-## Outputs
-
-| Output | Description |
+| Variable | Description |
 |---|---|
-| `policy_id` | UUID of the created policy |
-| `policy_number` | Sequential number assigned by Entitle |
-| `entitle_policy_url` | Direct link to the policy in the Entitle UI |
+| `idp_group_id` | UUID of the IdP group that triggers the policy |
+| `role_id` | UUID of the Entitle role to grant |
+
+### `passkey-service/.env`
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | Port the service listens on |
+| `SESSION_SECRET` | — | Random string for session signing |
+| `RP_NAME` | `Entitle Passkey Gate` | Name shown in the passkey prompt |
+| `RP_ID` | `localhost` | Bare hostname (no scheme/port) |
+| `ORIGIN` | `http://localhost:3000` | Full origin URL |
+| `GITHUB_APP_TOKEN` | — | GitHub PAT for posting statuses and dismissing reviews |
+| `GITHUB_WEBHOOK_SECRET` | — | Webhook HMAC secret |
+| `REQUIRED_APPROVALS` | `2` | Passkey-verified approvals needed to unlock merge |
+| `ALLOWED_REVIEWERS` | _(empty = anyone)_ | Comma-separated GitHub usernames allowed to register and approve |
+
+### GitHub Actions secrets
+
+| Secret | Description |
+|---|---|
+| `ENTITLE_API_KEY` | Entitle API key — passed to Terraform as `entitle_api_key` |
+| `TF_VAR_ENTITLE_ENDPOINT` | Custom Entitle endpoint (optional) |
