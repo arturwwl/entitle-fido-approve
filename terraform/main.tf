@@ -20,8 +20,6 @@ provider "entitle" {
 # the read-only role.  On group leave, access is revoked automatically.
 # ---------------------------------------------------------------------------
 resource "entitle_policy" "new_hire_birthright" {
-  sort_order = var.policy_sort_order
-
   in_groups = [
     {
       id   = var.idp_group_id
