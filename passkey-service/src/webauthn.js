@@ -61,6 +61,8 @@ async function verifyRegistration(req, res) {
   const expectedChallenge = store.getChallenge(req.sessionID);
   if (!expectedChallenge) return res.status(400).json({ error: 'No challenge found' });
 
+  console.log('Registration body received:', JSON.stringify(req.body, null, 2));
+
   let verification;
   try {
     verification = await verifyRegistrationResponse({

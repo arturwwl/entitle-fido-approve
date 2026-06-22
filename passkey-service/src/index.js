@@ -34,7 +34,7 @@ app.use(
 );
 
 // Serve the reviewer UI
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 
 // ---------------------------------------------------------------------------
 // Auth session: GitHub OAuth lite
